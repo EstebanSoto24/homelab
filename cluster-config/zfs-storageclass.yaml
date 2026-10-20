@@ -6,6 +6,6 @@ metadata:
     storageclass.kubernetes.io/is-default-class: "true"
 provisioner: zfs.csi.openebs.io
 parameters:
-  poolname: "polonia"
+  poolname: "polonia/k3s"
   fstype: "zfs"
   shared: "yes"
