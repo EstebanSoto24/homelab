@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: zfs-pvc
+  namespace: default
+spec:
+  storageClassName: openebs-zfs # Nombre de tu StorageClass de ZFS
+  accessModes:
+    - ReadWriteOnce # ZFS LocalPV es almacenamiento local (ligado a 1 nodo)
+  resources:
+    requests:
+      storage: 10Gi
