@@ -22,22 +22,13 @@ spec:
     # lo comprueba y Traefik guarda el certificado en /data/acme.json.
     # Dos resolvers: staging para probar (cert no válido, sin límites) y producción.
     certificatesResolvers:
-      letsencrypt-staging:
-        acme:
-          caServer: https://acme-staging-v02.api.letsencrypt.org/directory
-          storage: /data/acme.json
-          dnsChallenge:
-            provider: cloudflare
-            resolvers:            # DNS públicos para comprobar que el TXT ya se ve
-              - "1.1.1.1:53"
-              - "1.0.0.1:53"
       letsencrypt:
         acme:
           storage: /data/acme.json
           dnsChallenge:
             provider: cloudflare
             resolvers:
-              - "1.1.1.1:53"
+              - "8.8.8.8:53"
               - "1.0.0.1:53"
 
     # Token de Cloudflare: Secret creado a mano, NO va en git
@@ -76,6 +67,9 @@ spec:
 
     # --- Entrypoints -----------------------------------------------------
     ports:
+      traefik:
+        observability:
+          accessLogs: false
       web:
         http:
           redirections:
@@ -126,6 +120,7 @@ spec:
         level: INFO
       access:
         enabled: true
+        addInternals: true 
 
     # --- IP real del cliente ---------------------------------------------
     service:
