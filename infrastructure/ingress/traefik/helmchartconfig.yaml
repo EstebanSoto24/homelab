@@ -1,0 +1,141 @@
+# Personaliza el Traefik que instala k3s.
+# k3s mezcla estos values con los del HelmChart "traefik" y relanza helm-install-traefik.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik          # tiene que llamarse igual que el HelmChart de k3s
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    # --- Dashboard: https://traefik.estebansoto.space/dashboard/ ----------
+    ingressRoute:
+      dashboard:
+        enabled: true
+        entryPoints:
+          - websecure
+        matchRule: Host(`traefik.estebansoto.space`) && (PathPrefix(`/dashboard`) || PathPrefix(`/api`))
+        middlewares:
+          - name: traefik-dashboard-auth
+
+    # --- Certificados Let's Encrypt vía Cloudflare (DNS-01) ---------------
+    # Traefik crea un TXT _acme-challenge en Cloudflare con el token, Let's Encrypt
+    # lo comprueba y Traefik guarda el certificado en /data/acme.json.
+    # Dos resolvers: staging para probar (cert no válido, sin límites) y producción.
+    certificatesResolvers:
+      letsencrypt-staging:
+        acme:
+          caServer: https://acme-staging-v02.api.letsencrypt.org/directory
+          storage: /data/acme.json
+          dnsChallenge:
+            provider: cloudflare
+            resolvers:            # DNS públicos para comprobar que el TXT ya se ve
+              - "1.1.1.1:53"
+              - "1.0.0.1:53"
+      letsencrypt:
+        acme:
+          storage: /data/acme.json
+          dnsChallenge:
+            provider: cloudflare
+            resolvers:
+              - "1.1.1.1:53"
+              - "1.0.0.1:53"
+
+    # Token de Cloudflare: Secret creado a mano, NO va en git
+    env:
+      - name: CF_DNS_API_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: cloudflare-api-token
+            key: api-token
+
+    # --- acme.json persistente en ZFS ------------------------------------
+    # Sin volumen, cada reinicio pediría certificados nuevos y acabarías
+    # chocando con los límites de Let's Encrypt.
+    persistence:
+      enabled: true
+      storageClass: openebs-zfs
+      size: 128Mi
+    # El volumen se monta con el grupo de Traefik (65532) para que pueda escribir.
+    # OnRootMismatch: no reaplica permisos en cada arranque (acme.json debe quedar en 600).
+    podSecurityContext:
+      fsGroup: 65532
+      fsGroupChangePolicy: OnRootMismatch
+    deployment:
+      initContainers:
+        - name: volume-permissions
+          image: busybox:1.37
+          command: ["sh", "-c", "touch /data/acme.json && chmod -v 600 /data/acme.json"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+    # Solo un Traefik puede escribir acme.json: al actualizar se para el pod viejo
+    # antes de arrancar el nuevo (unos segundos sin servicio).
+    updateStrategy:
+      type: Recreate
+      rollingUpdate: null
+
+    # --- Entrypoints -----------------------------------------------------
+    ports:
+      web:
+        http:
+          redirections:
+            entryPoint:
+              to: websecure
+              scheme: https
+              permanent: true
+      websecure:
+        http:
+          tls:
+            enabled: true
+            certResolver: letsencrypt
+            domains:                            # un único certificado wildcard para todo
+              - main: estebansoto.space
+                sans:
+                  - "*.estebansoto.space"
+        # Si activas el proxy de Cloudflare (nube naranja), las conexiones llegan desde
+        # IPs de Cloudflare: así Traefik se fía de su X-Forwarded-For y ve la IP real.
+        # Lista oficial: https://www.cloudflare.com/ips/
+        forwardedHeaders:
+          trustedIPs:
+            - 173.245.48.0/20
+            - 103.21.244.0/22
+            - 103.22.200.0/22
+            - 103.31.4.0/22
+            - 141.101.64.0/18
+            - 108.162.192.0/18
+            - 190.93.240.0/20
+            - 188.114.96.0/20
+            - 197.234.240.0/22
+            - 198.41.128.0/17
+            - 162.158.0.0/15
+            - 104.16.0.0/13
+            - 104.24.0.0/14
+            - 172.64.0.0/13
+            - 131.0.72.0/22
+            - 2400:cb00::/32
+            - 2606:4700::/32
+            - 2803:f800::/32
+            - 2405:b500::/32
+            - 2405:8100::/32
+            - 2a06:98c0::/29
+            - 2c0f:f248::/32
+
+    # --- Logs ------------------------------------------------------------
+    logs:
+      general:
+        level: INFO
+      access:
+        enabled: true
+
+    # --- IP real del cliente ---------------------------------------------
+    service:
+      spec:
+        externalTrafficPolicy: Local
+
+    # --- Recursos --------------------------------------------------------
+    resources:
+      requests:
+        cpu: 100m
+        memory: 64Mi
+      limits:
+        memory: 256Mi
