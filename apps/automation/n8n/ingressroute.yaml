@@ -1,0 +1,14 @@
+# Sin bloque tls: el wildcard *.estebansoto.space ya lo pone el entrypoint websecure.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: n8n
+  namespace: n8n
+spec:
+  entryPoints: [websecure]
+  routes:
+    - kind: Rule
+      match: Host(`n8n.estebansoto.space`)
+      services:
+        - name: n8n
+          port: 5678
