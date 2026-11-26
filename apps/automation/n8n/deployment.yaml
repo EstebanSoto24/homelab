@@ -1,0 +1,124 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: n8n
+  namespace: n8n
+  labels:
+    app.kubernetes.io/name: n8n
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate               # SQLite + RWO: nunca dos n8n escribiendo la misma BD
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: n8n
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: n8n
+    spec:
+      # Con un Service llamado "n8n", Kubernetes inyectaría N8N_PORT=tcp://10.43.x.x:5678
+      # y n8n lo leería como su configuración. Fallo clásico: se desactiva.
+      enableServiceLinks: false
+      securityContext:
+        runAsUser: 1000          
+        runAsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        # Sin fsGroup a propósito: el kubelet haría chown recursivo de 5 GB.
+      containers:
+        - name: n8n
+          image: docker.io/n8nio/n8n:2.49.6
+          ports:
+            - name: http
+              containerPort: 5678
+          env:
+            # --- URL pública: editor y webhooks ---
+            - name: N8N_HOST
+              value: n8n.estebansoto.space
+            - name: N8N_PORT
+              value: "5678"
+            - name: N8N_PROTOCOL
+              value: https
+            - name: N8N_EDITOR_BASE_URL
+              value: https://n8n.estebansoto.space/
+            - name: N8N_WEBHOOK_URL         
+              value: https://n8n.estebansoto.space/
+            - name: N8N_PROXY_HOPS           # Cloudflare + Traefik = 2 → IP real del cliente
+              value: "2"
+            # --- Zona horaria (Schedule Trigger, fechas) ---
+            - name: GENERIC_TIMEZONE
+              value: Europe/Madrid
+            - name: TZ
+              value: Europe/Madrid
+            # --- Datos ---
+            - name: DB_TYPE
+              value: sqlite
+            - name: N8N_DEFAULT_BINARY_DATA_MODE   # ficheros binarios a disco, no a RAM
+              value: filesystem
+            - name: N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS
+              value: "true"
+            - name: N8N_REINSTALL_MISSING_PACKAGES # reinstala nodos de la comunidad si faltan
+              value: "true"
+            # --- Code node en el sidecar de task runners ---
+            - name: N8N_RUNNERS_MODE
+              value: external
+            - name: N8N_RUNNERS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: n8n-runners
+                  key: auth-token
+            # Execute Command y Local File Trigger están desactivados por defecto desde la 2.0.
+            # Descomenta para activarlos (ver notas abajo):
+            # - name: NODES_EXCLUDE
+            #   value: "[]"
+          volumeMounts:
+            - name: data
+              mountPath: /home/node/.n8n
+          startupProbe:                # margen de hasta 10 min para las migraciones de BD
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:              # 200 solo con la BD conectada y migrada
+            httpGet: {path: /healthz/readiness, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {memory: 2Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+
+        - name: task-runners         
+          image: docker.io/n8nio/runners:2.49.6   
+          env:
+            - name: N8N_RUNNERS_TASK_BROKER_URI  
+              value: http://127.0.0.1:5679
+            - name: N8N_RUNNERS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: n8n-runners
+                  key: auth-token
+            - name: GENERIC_TIMEZONE
+              value: Europe/Madrid
+          ports:
+            - name: health
+              containerPort: 5680
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: n8n-data
