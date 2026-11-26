@@ -1,0 +1,61 @@
+# Importa el dataset existente polonia/n8n en OpenEBS (aprovisionamiento estático).
+---
+apiVersion: zfs.openebs.io/v1
+kind: ZFSVolume
+metadata:
+  name: n8n                      # = nombre del dataset dentro del pool → polonia/n8n
+  namespace: openebs             # los ZFSVolume siempre viven aquí
+  labels:
+    kubernetes.io/nodename: server-debian
+  # SIN finalizer "zfs.openebs.io/finalizer": si se borra este objeto,
+  # OpenEBS NO destruye el dataset.
+spec:
+  ownerNodeID: server-debian
+  poolName: polonia
+  capacity: "53687091200"        # 50 GiB en bytes = quota actual del dataset
+  fsType: zfs
+  volumeType: DATASET
+  shared: "yes"
+status:
+  state: Ready                   # "ya existe, no lo crees"
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: n8n-data
+spec:
+  capacity:
+    storage: 50Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain   # borrar el PVC nunca borra los datos
+  storageClassName: openebs-zfs
+  volumeMode: Filesystem
+  claimRef:                      # reservado solo para este PVC
+    namespace: n8n
+    name: n8n-data
+  csi:
+    driver: zfs.csi.openebs.io
+    fsType: zfs
+    volumeHandle: n8n            # = metadata.name del ZFSVolume
+    volumeAttributes:
+      openebs.io/poolname: polonia
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: openebs.io/nodeid
+              operator: In
+              values: [server-debian]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: n8n-data
+  namespace: n8n
+spec:
+  storageClassName: openebs-zfs
+  volumeName: n8n-data           # se ata a nuestro PV; OpenEBS no crea uno nuevo
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 50Gi
